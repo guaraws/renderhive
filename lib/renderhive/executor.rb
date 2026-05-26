@@ -15,25 +15,27 @@ module Renderhive
   # - Caches the `Rails.application.executor` lookup.
   class Executor
     DEFAULT_IDLE_TIMEOUT = 60
+    VALID_WORKLOADS = %i[ auto io cpu ].freeze
 
     class << self
-      def worker_count_for(size, max_threads: nil)
+      def worker_count_for(size, max_threads: nil, workload: :auto)
         return 0 if size.to_i <= 0
 
-        resolve_workers_count(size, max_threads)
+        resolve_workers_count(size, max_threads, normalize_workload(workload))
       end
 
-      def map(items, max_threads: nil, needs_db: true, &block)
+      def map(items, max_threads: nil, needs_db: true, workload: :auto, &block)
         collection = items.is_a?(Array) ? items : items.to_a
         size = collection.size
         return [] if size.zero?
 
-        workers = worker_count_for(size, max_threads: max_threads)
+        workers = worker_count_for(size, max_threads: max_threads, workload: workload)
         return collection.map(&block) if workers <= 1
 
         results = Array.new(size)
-        errors = Concurrent::Array.new
         chunk_size = (size.to_f / workers).ceil
+        first_error = nil
+        error_mutex = Mutex.new
 
         chunks = []
         (0...size).each_slice(chunk_size) { |range| chunks << range }
@@ -50,7 +52,7 @@ module Renderhive
                 end
               end
             rescue Exception => error # rubocop:disable Lint/RescueException
-              errors << error
+              error_mutex.synchronize { first_error ||= error }
             ensure
               latch.count_down
             end
@@ -58,7 +60,7 @@ module Renderhive
         end
 
         latch.wait
-        raise errors.first unless errors.empty?
+        raise first_error if first_error
 
         results
       end
@@ -97,9 +99,23 @@ module Renderhive
         @max_pool_threads ||= [ default_workers * 2, 32 ].min
       end
 
-      def resolve_workers_count(size, max_threads)
+      def resolve_workers_count(size, max_threads, workload)
         configured = max_threads || default_workers
-        [ [ configured.to_i, 1 ].max, size ].min
+        workers = [ [ configured.to_i, 1 ].max, size ].min
+
+        case workload
+        when :cpu
+          mri? ? [ workers, 1 ].min : workers
+        else
+          workers
+        end
+      end
+
+      def normalize_workload(workload)
+        normalized = workload.to_sym
+        return normalized if VALID_WORKLOADS.include?(normalized)
+
+        raise ArgumentError, "workload deve ser um de: #{VALID_WORKLOADS.join(', ')}"
       end
 
       def default_workers
@@ -149,6 +165,10 @@ module Renderhive
         ActiveRecord::Base.connection_pool.size
       rescue StandardError
         nil
+      end
+
+      def mri?
+        defined?(RUBY_ENGINE) ? RUBY_ENGINE == "ruby" : true
       end
     end
   end

@@ -61,7 +61,9 @@ module Renderhive
     end
 
     class_methods do
-      def parallelize_view_methods(*method_names, only: nil, except: nil, max_threads: nil)
+      def parallelize_view_methods(*method_names, only: nil, except: nil, max_threads: nil, workload: :auto)
+        normalized_workload = normalize_parallel_workload(workload)
+
         method_names.flatten.each do |raw_name|
           method_name = raw_name.to_sym
           validate_parallelizable_method!(method_name)
@@ -72,7 +74,8 @@ module Renderhive
               original_method: instance_method(method_name),
               only: normalize_parallel_actions(only),
               except: normalize_parallel_actions(except),
-              max_threads: max_threads
+              max_threads: max_threads,
+              workload: normalized_workload
             }
           )
 
@@ -89,8 +92,9 @@ module Renderhive
         end
       end
 
-      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil)
+      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil, workload: :auto)
         helper RenderInterceptor
+        normalized_workload = normalize_parallel_workload(workload)
 
         self.renderhive_parallel_collection_configs = renderhive_parallel_collection_configs + [
           {
@@ -102,7 +106,8 @@ module Renderhive
             except: normalize_parallel_actions(except),
             max_threads: max_threads,
             min_size: min_size.to_i,
-            batch_size: batch_size&.to_i
+            batch_size: batch_size&.to_i,
+            workload: normalized_workload
           }
         ]
       end
@@ -115,6 +120,10 @@ module Renderhive
 
       def normalize_parallel_actions(actions)
         Array(actions).flatten.compact.map(&:to_s)
+      end
+
+      def normalize_parallel_workload(workload)
+        Renderhive::Executor.send(:normalize_workload, workload)
       end
 
       def renderhive_parallel_wrapper_module
@@ -156,8 +165,10 @@ module Renderhive
 
     def renderhive_preload_view_methods(configs)
       thread_limit = configs.map { |config| config[:max_threads] }.compact.min
+      workload = renderhive_group_workload(configs)
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-      pairs = Renderhive::Executor.map(configs, max_threads: thread_limit) do |config|
+      pairs = Renderhive::Executor.map(configs, max_threads: thread_limit, workload: workload) do |config|
         [ config[:method_name], config[:original_method].bind_call(self) ]
       end
 
@@ -169,7 +180,10 @@ module Renderhive
         "view_methods.renderhive",
         controller: self.class.name,
         action: action_name,
-        methods: configs.map { |config| config[:method_name] }
+        methods: configs.map { |config| config[:method_name] },
+        workload: workload,
+        workers: Renderhive::Executor.worker_count_for(configs.size, max_threads: thread_limit, workload: workload),
+        elapsed_ms: renderhive_elapsed_ms(started_at)
       )
     end
 
@@ -190,6 +204,7 @@ module Renderhive
             size: collection.size,
             min_size: config[:min_size],
             skipped: true,
+            workload: config[:workload] || :auto,
             reason: :below_min_size
           )
           next
@@ -211,8 +226,9 @@ module Renderhive
         partial_path = config[:partial] || collection.first.to_partial_path
         local_name = config[:as] || renderhive_local_name_for(partial_path)
         template = base_view.lookup_context.find_template(partial_path, [], true, [ local_name ], {})
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-        fragments, batch_count = renderhive_pre_render_collection(
+        fragments, metrics = renderhive_pre_render_collection(
           collection,
           partial_path,
           template,
@@ -234,14 +250,19 @@ module Renderhive
           min_size: config[:min_size],
           skipped: false,
           render_mode: :batched_collection,
-          batch_count: batch_count
+          batch_count: metrics[:batch_count],
+          chunk_size: metrics[:chunk_size],
+          workers: metrics[:workers],
+          workload: metrics[:workload],
+          elapsed_ms: renderhive_elapsed_ms(started_at)
         )
       end
     end
 
     def renderhive_pre_render_collection(collection, partial_path, template, local_name, config, base_view)
       size = collection.size
-      workers = Renderhive::Executor.worker_count_for(size, max_threads: config[:max_threads])
+      workload = config[:workload] || :auto
+      workers = Renderhive::Executor.worker_count_for(size, max_threads: config[:max_threads], workload: workload)
       workers = 1 if workers <= 0
 
       chunk_size =
@@ -265,7 +286,7 @@ module Renderhive
         # RenderInterceptor returns the full batch HTML on the first hit
         # and an empty string on the following ones — equivalent output
         # with 1 render per worker instead of 1 per record.
-        rendered = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false) do |records|
+        rendered = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |records|
           view = base_view.dup
           render_opts = {
             partial: partial_path,
@@ -286,7 +307,7 @@ module Renderhive
       else
         # Dynamic locals per record require individual calls; we still
         # reuse the pre-resolved template to skip template lookup.
-        rendered_chunks = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false) do |records|
+        rendered_chunks = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |records|
           view = base_view.dup
           records.map do |record|
             locals = renderhive_locals_for_fragment(local_name, record, dynamic_locals, static_locals)
@@ -299,7 +320,7 @@ module Renderhive
         end
       end
 
-      [ fragments, chunks.size ]
+      [ fragments, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload } ]
     end
 
     def renderhive_active_method_configs
@@ -337,6 +358,15 @@ module Renderhive
 
     def renderhive_local_name_for(partial_path)
       File.basename(partial_path.to_s).sub(/\A_/, "").to_sym
+    end
+
+    def renderhive_group_workload(configs)
+      workloads = configs.map { |config| (config[:workload] || :auto).to_sym }.uniq
+      workloads.one? ? workloads.first : :auto
+    end
+
+    def renderhive_elapsed_ms(started_at)
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000.0).round(2)
     end
 
     def renderhive_fragment_key(renderable)

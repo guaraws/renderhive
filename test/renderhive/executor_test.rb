@@ -15,6 +15,15 @@ class Renderhive::ExecutorTest < Minitest::Test
     assert_equal 3, Renderhive::Executor.worker_count_for(3, max_threads: 8)
   end
 
+  def test_worker_count_for_cpu_workload_is_conservative_on_mri
+    expected = defined?(RUBY_ENGINE) && RUBY_ENGINE == "ruby" ? 1 : 8
+    assert_equal expected, Renderhive::Executor.worker_count_for(10, max_threads: 8, workload: :cpu)
+  end
+
+  def test_worker_count_for_io_workload_preserves_requested_threads
+    assert_equal 8, Renderhive::Executor.worker_count_for(10, max_threads: 8, workload: :io)
+  end
+
   def test_map_returns_results_in_order
     items = (1..50).to_a
     out = Renderhive::Executor.map(items, max_threads: 4, needs_db: false) { |n| n * 2 }
@@ -39,5 +48,13 @@ class Renderhive::ExecutorTest < Minitest::Test
 
   def test_map_returns_empty_for_empty_input
     assert_equal [], Renderhive::Executor.map([], needs_db: false) { |x| x }
+  end
+
+  def test_map_rejects_invalid_workload
+    err = assert_raises(ArgumentError) do
+      Renderhive::Executor.map([ 1, 2, 3 ], needs_db: false, workload: :wat) { |x| x }
+    end
+
+    assert_match(/workload deve ser um de/, err.message)
   end
 end

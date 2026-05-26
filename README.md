@@ -125,11 +125,13 @@ class CarsController < ApplicationController
   parallelize_view_methods :total_cars_card,
                            :brands_count_card,
                            :latest_year_card,
-                           only: :index
+             only: :index,
+             workload: :io
 
   parallelize_partial_collection :cars,
                                  only: :index,
-                                 min_size: 6
+               min_size: 6,
+               workload: :io
 
   def index
     @cars = Car.all.to_a.freeze
@@ -154,15 +156,16 @@ That's it. On the next request Renderhive will:
 
 ### DSL reference
 
-#### `parallelize_view_methods(*method_names, only:, except:, max_threads:)`
+#### `parallelize_view_methods(*method_names, only:, except:, max_threads:, workload:)`
 
 Marks zero-argument helper methods for parallel pre-computation. The
 method must be defined **before** the call.
 
 - `only:` / `except:` — restrict to specific actions.
 - `max_threads:` — cap the worker count for this group.
+- `workload:` — hint for the scheduler: `:auto` (default), `:io` or `:cpu`.
 
-#### `parallelize_partial_collection(collection_name, partial:, as:, locals:, only:, except:, max_threads:, min_size:, batch_size:)`
+#### `parallelize_partial_collection(collection_name, partial:, as:, locals:, only:, except:, max_threads:, min_size:, batch_size:, workload:)`
 
 Marks an instance variable (`@#{collection_name}`) for parallel
 pre-rendering.
@@ -174,7 +177,18 @@ pre-rendering.
 - `min_size:` — only kick in when the collection has at least this many
   items (default: `0`).
 - `batch_size:` — override automatic chunk sizing.
+- `workload:` — hint for the scheduler: `:auto` (default), `:io` or `:cpu`.
 - `only:` / `except:` / `max_threads:` — same as above.
+
+### Choosing a workload profile
+
+- `:auto` — default mode. Keeps the configured worker count and is the best
+  starting point when the partial mixes rendering and I/O.
+- `:io` — prefer this when helpers or partials trigger lazy queries, cache
+  reads, asset path resolution or other wait-heavy work.
+- `:cpu` — prefer this for ERB-heavy, string-heavy partials on MRI. Renderhive
+  becomes conservative and avoids spinning extra Ruby workers when the GVL
+  would mostly serialize the work anyway.
 
 ## Instrumentation
 
@@ -182,14 +196,16 @@ Renderhive emits `ActiveSupport::Notifications` events:
 
 | Event                          | Payload keys |
 | ------------------------------ | --- |
-| `view_methods.renderhive`      | `controller`, `action`, `methods` |
-| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `reason` |
+| `view_methods.renderhive`      | `controller`, `action`, `methods`, `workload`, `workers`, `elapsed_ms` |
+| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `elapsed_ms`, `reason` |
 
 ## Caveats
 
 - See the [Benchmarks](#benchmarks) section for realistic expectations
   on MRI — the GVL caps the speedup at roughly 1.4–1.6× for pure
   rendering workloads.
+- If a partial is mostly ERB/string work on MRI, prefer `workload: :cpu`
+  so Renderhive stays conservative about extra workers.
 - The batched collection path assumes the view iterates the collection
   in its original order (the typical `each do |record|` pattern).
 - `view_context.dup` is shallow; if your helpers maintain mutable
