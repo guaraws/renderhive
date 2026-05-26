@@ -34,6 +34,63 @@ Internally the rendered HTML is cached and `render(record)` calls inside
 the view simply return the pre-baked SafeBuffer — your templates stay
 untouched.
 
+## Benchmarks
+
+Numbers below come from the reference Rails 8.1 app shipped alongside
+this gem (`script/bench_cars_index.rb`), hitting the full Rack stack via
+`Rails.application.call(env)` against the `CarsController#index` action.
+The page renders three "summary" helper methods plus a partial collection
+of `Car` records (one ERB partial per card, ~2 KB of HTML each).
+
+Environment: MRI 3.4.6, Linux, `RAILS_ENV=test`, single process, warm
+caches. Each row is the mean of 20 runs after 3 warm-up calls.
+
+| Records | Serial (no Renderhive) | Renderhive | Speedup |
+| ------: | ---------------------: | ---------: | ------: |
+|     200 |                ~42 ms |     ~30 ms |  ~1.4× |
+|   1 000 |               ~188 ms |    ~118 ms | ~1.59× |
+
+Reproduce locally from the host app:
+
+```sh
+RAILS_ENV=test bundle exec ruby script/bench_cars_index.rb
+# status=200 body_bytes=2281901
+# parallel     min=101.72ms avg=118.09ms max=161.02ms
+# serial       min=173.20ms avg=188.41ms max=209.24ms
+```
+
+### Why the gain is not "Nx workers"
+
+ERB rendering on MRI is CPU-bound Ruby and the **GVL** serializes pure
+Ruby execution. The measurable gains come from:
+
+1. Overlapping I/O performed inside partials (lazy AR associations,
+   `Rails.cache` reads, `image_url`/`asset_path` lookups).
+2. Parallelizing helper methods that themselves trigger queries
+   (`parallelize_view_methods`).
+3. Reducing per-fragment overhead by pre-resolving the template once
+   and reusing a duplicated view context per worker.
+
+Expect roughly **1.4–1.6×** on wide pages with hundreds of cards on
+MRI. Workloads dominated by AR query latency (cache misses, N+1 reads)
+can push the ratio higher; pages that are pure string interpolation
+will see smaller gains.
+
+### When it is worth adopting
+
+- `index`/dashboard pages with **dozens to hundreds** of cards or rows
+  rendered from a single collection.
+- Controllers that compute several **independent** summary/aggregate
+  helper methods before rendering.
+- Pages where partials trigger lazy DB or cache reads.
+
+### When it is *not* worth it
+
+- Small collections (use `min_size:` to short-circuit — Renderhive
+  already skips below the threshold).
+- Pages already covered by HTTP/fragment caching with a high hit ratio.
+- JSON or API endpoints (the concern is HTML-only).
+
 ## Installation
 
 ```ruby
@@ -130,10 +187,9 @@ Renderhive emits `ActiveSupport::Notifications` events:
 
 ## Caveats
 
-- **MRI / GVL.** ERB rendering is CPU-bound Ruby and the GVL serializes
-  pure Ruby execution. Gains are highest when partials trigger I/O
-  (lazy associations, cache reads, etc.). Expect roughly **1.4–1.6×** on
-  wide pages with hundreds of cards.
+- See the [Benchmarks](#benchmarks) section for realistic expectations
+  on MRI — the GVL caps the speedup at roughly 1.4–1.6× for pure
+  rendering workloads.
 - The batched collection path assumes the view iterates the collection
   in its original order (the typical `each do |record|` pattern).
 - `view_context.dup` is shallow; if your helpers maintain mutable
