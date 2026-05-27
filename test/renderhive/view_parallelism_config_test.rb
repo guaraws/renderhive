@@ -35,6 +35,21 @@ class Renderhive::ViewParallelismConfigTest < Minitest::Test
     assert_equal :io, controller.renderhive_parallel_collection_configs.first[:workload]
   end
 
+  def test_parallelize_partial_collection_stores_delivery
+    controller = Class.new do
+      include Renderhive::ViewParallelism
+
+      class << self
+        def helper(*)
+        end
+      end
+
+      parallelize_partial_collection :cars, delivery: :collection
+    end
+
+    assert_equal :collection, controller.renderhive_parallel_collection_configs.first[:delivery]
+  end
+
   def test_parallelize_view_methods_rejects_invalid_workload
     err = assert_raises(ArgumentError) do
       Class.new do
@@ -71,5 +86,22 @@ class Renderhive::ViewParallelismConfigTest < Minitest::Test
     end
 
     assert_match(/workload deve ser um de/, err.message)
+  end
+
+  def test_parallelize_partial_collection_rejects_invalid_delivery
+    err = assert_raises(ArgumentError) do
+      Class.new do
+        include Renderhive::ViewParallelism
+
+        class << self
+          def helper(*)
+          end
+        end
+
+        parallelize_partial_collection :cars, delivery: :wat
+      end
+    end
+
+    assert_match(/delivery deve ser um de/, err.message)
   end
 end

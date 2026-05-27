@@ -131,7 +131,8 @@ class CarsController < ApplicationController
   parallelize_partial_collection :cars,
                                  only: :index,
                min_size: 6,
-               workload: :io
+                                 workload: :io,
+                                 delivery: :collection
 
   def index
     @cars = Car.all.to_a.freeze
@@ -139,11 +140,14 @@ class CarsController < ApplicationController
 end
 ```
 
-In the view, write the loop as usual:
+If you want the lowest-overhead path, let Renderhive emit the full HTML for
+the collection in one shot:
 
 ```erb
-<% cars_records.each do |car| %>
-  <%= render car %>
+<%= renderhive_collection(:cars) do %>
+  <% cars_records.each do |car| %>
+    <%= render car %>
+  <% end %>
 <% end %>
 ```
 
@@ -165,7 +169,7 @@ method must be defined **before** the call.
 - `max_threads:` — cap the worker count for this group.
 - `workload:` — hint for the scheduler: `:auto` (default), `:io` or `:cpu`.
 
-#### `parallelize_partial_collection(collection_name, partial:, as:, locals:, only:, except:, max_threads:, min_size:, batch_size:, workload:)`
+#### `parallelize_partial_collection(collection_name, partial:, as:, locals:, only:, except:, max_threads:, min_size:, batch_size:, workload:, delivery:)`
 
 Marks an instance variable (`@#{collection_name}`) for parallel
 pre-rendering.
@@ -178,6 +182,8 @@ pre-rendering.
   items (default: `0`).
 - `batch_size:` — override automatic chunk sizing.
 - `workload:` — hint for the scheduler: `:auto` (default), `:io` or `:cpu`.
+- `delivery:` — `:fragments` (default, compatible with `render record`),
+  `:collection` (optimized for `renderhive_collection`) or `:both`.
 - `only:` / `except:` / `max_threads:` — same as above.
 
 ### Choosing a workload profile
@@ -190,6 +196,13 @@ pre-rendering.
   becomes conservative and avoids spinning extra Ruby workers when the GVL
   would mostly serialize the work anyway.
 
+### Choosing a delivery mode
+
+- `:fragments` — default, keeps the transparent interceptor for `render(record)`.
+- `:collection` — optimized path for `renderhive_collection(:items)`, skipping
+  the per-record fragment map.
+- `:both` — stores both representations during migrations or mixed usage.
+
 ## Instrumentation
 
 Renderhive emits `ActiveSupport::Notifications` events:
@@ -197,7 +210,7 @@ Renderhive emits `ActiveSupport::Notifications` events:
 | Event                          | Payload keys |
 | ------------------------------ | --- |
 | `view_methods.renderhive`      | `controller`, `action`, `methods`, `workload`, `workers`, `elapsed_ms` |
-| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `elapsed_ms`, `reason` |
+| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `delivery`, `elapsed_ms`, `reason` |
 
 ## Caveats
 
@@ -206,6 +219,9 @@ Renderhive emits `ActiveSupport::Notifications` events:
   rendering workloads.
 - If a partial is mostly ERB/string work on MRI, prefer `workload: :cpu`
   so Renderhive stays conservative about extra workers.
+- If you control the template, prefer `delivery: :collection` with
+  `renderhive_collection(:items)` to remove the per-record render loop from
+  the hot path.
 - The batched collection path assumes the view iterates the collection
   in its original order (the typical `each do |record|` pattern).
 - `view_context.dup` is shallow; if your helpers maintain mutable

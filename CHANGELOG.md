@@ -10,8 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `workload:` hints for `parallelize_view_methods` and `parallelize_partial_collection`
   with `:auto`, `:io` and `:cpu` modes.
+- `delivery:` modes for collection rendering with an optimized `:collection`
+  fast path exposed through `renderhive_collection(:items)`.
 - Richer `ActiveSupport::Notifications` payloads including `workload`, `workers`,
-  `chunk_size` and `elapsed_ms`.
+  `chunk_size`, `delivery` and `elapsed_ms`.
 
 ### Changed
 - CPU-bound workloads on MRI now use a conservative worker count to reduce

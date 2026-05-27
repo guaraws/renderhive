@@ -29,6 +29,7 @@ module Renderhive
   module ViewParallelism
     EMPTY_LOCALS = {}.freeze
     EMPTY_HTML = ActiveSupport::SafeBuffer.new.freeze
+    VALID_DELIVERIES = %i[ fragments collection both ].freeze
 
     # Helper module injected into the controller's view helpers so that
     # `render(record)` returns the pre-rendered fragment when available.
@@ -53,9 +54,29 @@ module Renderhive
       end
     end
 
+    # Helper module for views that want the lowest-overhead path: render the
+    # fully pre-baked HTML for a configured collection in one shot instead of
+    # calling `render(record)` for every item.
+    module CollectionRenderer
+      def renderhive_collection(collection_name, &block)
+        ctrl = controller
+
+        if ctrl
+          ctrl.send(:renderhive_prepare_parallel_view_workload)
+          html = ctrl.instance_variable_get(:@_renderhive_collection_html)&.[](collection_name.to_sym)
+          return html if html
+        end
+
+        return capture(&block) if block_given?
+
+        EMPTY_HTML
+      end
+    end
+
     extend ActiveSupport::Concern
 
     included do
+      helper CollectionRenderer if respond_to?(:helper)
       class_attribute :renderhive_parallel_method_configs, default: {}
       class_attribute :renderhive_parallel_collection_configs, default: []
     end
@@ -92,9 +113,10 @@ module Renderhive
         end
       end
 
-      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil, workload: :auto)
-        helper RenderInterceptor
+      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil, workload: :auto, delivery: :fragments)
+        helper RenderInterceptor if respond_to?(:helper)
         normalized_workload = normalize_parallel_workload(workload)
+        normalized_delivery = normalize_parallel_delivery(delivery)
 
         self.renderhive_parallel_collection_configs = renderhive_parallel_collection_configs + [
           {
@@ -107,7 +129,8 @@ module Renderhive
             max_threads: max_threads,
             min_size: min_size.to_i,
             batch_size: batch_size&.to_i,
-            workload: normalized_workload
+            workload: normalized_workload,
+            delivery: normalized_delivery
           }
         ]
       end
@@ -124,6 +147,13 @@ module Renderhive
 
       def normalize_parallel_workload(workload)
         Renderhive::Executor.send(:normalize_workload, workload)
+      end
+
+      def normalize_parallel_delivery(delivery)
+        normalized = delivery.to_sym
+        return normalized if VALID_DELIVERIES.include?(normalized)
+
+        raise ArgumentError, "delivery deve ser um de: #{VALID_DELIVERIES.join(', ')}"
       end
 
       def renderhive_parallel_wrapper_module
@@ -205,6 +235,7 @@ module Renderhive
             min_size: config[:min_size],
             skipped: true,
             workload: config[:workload] || :auto,
+            delivery: config[:delivery] || :fragments,
             reason: :below_min_size
           )
           next
@@ -228,7 +259,7 @@ module Renderhive
         template = base_view.lookup_context.find_template(partial_path, [], true, [ local_name ], {})
         started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-        fragments, metrics = renderhive_pre_render_collection(
+        fragments, collection_html, metrics = renderhive_pre_render_collection(
           collection,
           partial_path,
           template,
@@ -238,7 +269,9 @@ module Renderhive
         )
 
         @_renderhive_fragments_by_partial ||= {}
-        @_renderhive_fragments_by_partial[partial_path] = fragments
+        @_renderhive_fragments_by_partial[partial_path] = fragments if fragments
+        @_renderhive_collection_html ||= {}
+        @_renderhive_collection_html[config[:collection_name]] = collection_html if collection_html
 
         ActiveSupport::Notifications.instrument(
           "view_collection.renderhive",
@@ -254,6 +287,7 @@ module Renderhive
           chunk_size: metrics[:chunk_size],
           workers: metrics[:workers],
           workload: metrics[:workload],
+          delivery: metrics[:delivery],
           elapsed_ms: renderhive_elapsed_ms(started_at)
         )
       end
@@ -275,8 +309,12 @@ module Renderhive
       chunks = collection.each_slice(chunk_size).to_a
       dynamic_locals = config[:locals].is_a?(Proc) ? config[:locals] : nil
       static_locals = config[:locals].is_a?(Hash) ? config[:locals] : EMPTY_LOCALS
+      delivery = config[:delivery] || :fragments
+      store_fragments = %i[fragments both].include?(delivery)
+      store_collection_html = %i[collection both].include?(delivery)
 
-      fragments = {}
+      fragments = store_fragments ? {} : nil
+      collection_html = store_collection_html ? ActiveSupport::SafeBuffer.new : nil
 
       if dynamic_locals.nil?
         # Fast path: each worker issues ONE call to the partial collection
@@ -300,6 +338,10 @@ module Renderhive
         end
 
         rendered.each do |records, html|
+          collection_html << html if collection_html
+
+          next unless fragments
+
           records.each_with_index do |record, idx|
             fragments[renderhive_fragment_key(record)] = idx.zero? ? html : EMPTY_HTML
           end
@@ -316,11 +358,14 @@ module Renderhive
         end
 
         rendered_chunks.each do |pairs|
-          pairs.each { |key, html| fragments[key] = html }
+          pairs.each do |key, html|
+            collection_html << html if collection_html
+            fragments[key] = html if fragments
+          end
         end
       end
 
-      [ fragments, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload } ]
+      [ fragments, collection_html, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload, delivery: delivery } ]
     end
 
     def renderhive_active_method_configs
