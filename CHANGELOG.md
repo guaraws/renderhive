@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native HTML escaper (`Renderhive::HTML.escape` / `unwrapped_html_escape`)
   matching `ERB::Util.html_escape`, with a zero-allocation fast path when
   nothing needs escaping and a `CGI.escapeHTML` fallback.
+- In-request fragment de-duplication for `parallelize_partial_collection`
+  via the `dedup:` option. When several records map to the same key, only
+  one representative per distinct key is rendered (in parallel) and the
+  resulting fragment is reused for every record that shares the key, so the
+  render cost scales with the number of distinct outputs instead of the
+  collection size.
 - `benchmark/buffer_join_bench.rb` and `benchmark/html_escape_bench.rb`
   comparing the native paths against the pure-Ruby/stdlib strategies.
 - `workload:` hints for `parallelize_view_methods` and `parallelize_partial_collection`

@@ -273,6 +273,39 @@ render-dominated, mostly-plain output rather than a universal win.
 bundle exec ruby benchmark/html_escape_bench.rb
 ```
 
+## Fragment de-duplication
+
+When many records in a collection render to the **same** HTML (a repeated
+pattern that depends only on a low-cardinality attribute), there is no point
+re-rendering identical output for every record. Pass a `dedup:` callable to
+`parallelize_partial_collection`: Renderhive renders **one representative per
+distinct key** (in parallel) and reuses the resulting fragment for every
+record that shares the key, so the render cost scales with the number of
+**distinct outputs** instead of the collection size.
+
+```ruby
+parallelize_partial_collection :badges,
+  only: :index,
+  dedup: ->(badge) { badge.status }   # output depends only on status
+```
+
+Correctness contract: the key **must** fully determine the rendered output
+(same idea as the cache key in Rails collection caching). If two records can
+produce different HTML for the same key, do not dedup them.
+
+Benchmark (`benchmark/dedup_bench.rb`, MRI 3.4.6) — output verified
+byte-identical to the full render:
+
+| Workload                          | Speed-up vs full render |
+| --------------------------------- | ----------------------: |
+| 1000 rows, 5 distinct outputs     |                  ~7.3×  |
+| 1000 rows, 2 distinct outputs     |                  ~7.2×  |
+| 5000 rows, 5 distinct outputs     |                  ~8.1×  |
+
+```sh
+bundle exec ruby benchmark/dedup_bench.rb
+```
+
 ## Instrumentation
 
 Renderhive emits `ActiveSupport::Notifications` events:
@@ -280,7 +313,7 @@ Renderhive emits `ActiveSupport::Notifications` events:
 | Event                          | Payload keys |
 | ------------------------------ | --- |
 | `view_methods.renderhive`      | `controller`, `action`, `methods`, `workload`, `workers`, `elapsed_ms` |
-| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `delivery`, `elapsed_ms`, `reason` |
+| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `delivery`, `deduped`, `distinct_count`, `elapsed_ms`, `reason` |
 
 ## Caveats
 

@@ -113,10 +113,11 @@ module Renderhive
         end
       end
 
-      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil, workload: :auto, delivery: :fragments)
+      def parallelize_partial_collection(collection_name, partial: nil, as: nil, locals: nil, only: nil, except: nil, max_threads: nil, min_size: 0, batch_size: nil, workload: :auto, delivery: :fragments, dedup: nil)
         helper RenderInterceptor if respond_to?(:helper)
         normalized_workload = normalize_parallel_workload(workload)
         normalized_delivery = normalize_parallel_delivery(delivery)
+        normalized_dedup = normalize_parallel_dedup(dedup)
 
         self.renderhive_parallel_collection_configs = renderhive_parallel_collection_configs + [
           {
@@ -130,7 +131,8 @@ module Renderhive
             min_size: min_size.to_i,
             batch_size: batch_size&.to_i,
             workload: normalized_workload,
-            delivery: normalized_delivery
+            delivery: normalized_delivery,
+            dedup: normalized_dedup
           }
         ]
       end
@@ -154,6 +156,13 @@ module Renderhive
         return normalized if VALID_DELIVERIES.include?(normalized)
 
         raise ArgumentError, "delivery deve ser um de: #{VALID_DELIVERIES.join(', ')}"
+      end
+
+      def normalize_parallel_dedup(dedup)
+        return nil if dedup.nil?
+        return dedup if dedup.respond_to?(:call)
+
+        raise ArgumentError, "dedup deve responder a #call (ex.: ->(record) { record.status })"
       end
 
       def renderhive_parallel_wrapper_module
@@ -282,12 +291,14 @@ module Renderhive
           size: collection.size,
           min_size: config[:min_size],
           skipped: false,
-          render_mode: :batched_collection,
+          render_mode: metrics[:deduped] ? :deduped_collection : :batched_collection,
           batch_count: metrics[:batch_count],
           chunk_size: metrics[:chunk_size],
           workers: metrics[:workers],
           workload: metrics[:workload],
           delivery: metrics[:delivery],
+          deduped: metrics[:deduped] || false,
+          distinct_count: metrics[:distinct_count],
           elapsed_ms: renderhive_elapsed_ms(started_at)
         )
       end
@@ -316,7 +327,58 @@ module Renderhive
       fragments = store_fragments ? {} : nil
       collection_parts = store_collection_html ? [] : nil
 
-      if dynamic_locals.nil?
+      if config[:dedup]
+        # De-duplication path: many records that map to the same key produce
+        # identical HTML, so we render ONE representative per distinct key
+        # (in parallel) and reuse the same frozen fragment object for every
+        # record that shares the key. Work is proportional to the number of
+        # DISTINCT outputs, not to the collection size.
+        keys, distinct_pairs = renderhive_dedup_index(collection, config[:dedup])
+        distinct_workers = Renderhive::Executor.worker_count_for(distinct_pairs.size, max_threads: config[:max_threads], workload: workload)
+        distinct_workers = 1 if distinct_workers <= 0
+        distinct_chunk =
+          if config[:batch_size].to_i.positive?
+            config[:batch_size]
+          else
+            [ (distinct_pairs.size.to_f / distinct_workers).ceil, 1 ].max
+          end
+        distinct_chunks = distinct_pairs.each_slice(distinct_chunk).to_a
+
+        rendered_chunks = Renderhive::Executor.map(distinct_chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |pairs|
+          view = base_view.dup
+          pairs.map do |key, record|
+            locals = renderhive_locals_for_fragment(local_name, record, dynamic_locals, static_locals)
+            [ key, template.render(view, locals) ]
+          end
+        end
+
+        html_by_key = {}
+        rendered_chunks.each { |pairs| pairs.each { |key, html| html_by_key[key] = html } }
+
+        if fragments
+          collection.each_with_index do |record, idx|
+            fragments[renderhive_fragment_key(record)] = html_by_key[keys[idx]]
+          end
+        end
+
+        keys.each { |key| collection_parts << html_by_key[key] } if collection_parts
+
+        collection_html = collection_parts && Renderhive::Buffer.join(collection_parts)
+
+        return [
+          fragments,
+          collection_html,
+          {
+            batch_count: distinct_chunks.size,
+            chunk_size: distinct_chunk,
+            workers: distinct_workers,
+            workload: workload,
+            delivery: delivery,
+            deduped: true,
+            distinct_count: distinct_pairs.size
+          }
+        ]
+      elsif dynamic_locals.nil?
         # Fast path: each worker issues ONE call to the partial collection
         # renderer for the whole chunk. The resulting HTML is stored under
         # the first record's key; the remaining ones receive an empty
@@ -424,6 +486,22 @@ module Renderhive
       else
         renderable.object_id
       end
+    end
+
+    # Builds the per-record key list and the ordered list of distinct
+    # (key, representative_record) pairs used by the de-duplication path.
+    # The first record seen for a key becomes its representative.
+    def renderhive_dedup_index(collection, dedup)
+      keys = Array.new(collection.size)
+      representatives = {}
+
+      collection.each_with_index do |record, idx|
+        key = dedup.arity == 2 ? dedup.call(record, self) : dedup.call(record)
+        keys[idx] = key
+        representatives[key] = record unless representatives.key?(key)
+      end
+
+      [ keys, representatives.to_a ]
     end
   end
 end
