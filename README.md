@@ -203,6 +203,76 @@ pre-rendering.
   the per-record fragment map.
 - `:both` — stores both representations during migrations or mixed usage.
 
+## Native extension (Rust)
+
+Renderhive ships an **optional** Rust extension (`renderhive_native`) that
+accelerates the final step of collection pre-rendering: joining the many
+HTML fragments into a single buffer.
+
+- The whole result is allocated **once** (no incremental `SafeBuffer#<<`
+  reallocations) and filled in a single pass.
+- For large payloads the byte copy is spread across CPU cores with
+  [`rayon`](https://crates.io/crates/rayon), giving **true parallelism**
+  that is not serialized by the GVL (each worker only touches disjoint
+  byte ranges of pre-rendered, immutable strings).
+
+The extension is **fully optional**: if no Rust toolchain is available at
+install time, Renderhive transparently falls back to a pure-Ruby join, so
+the gem keeps working everywhere. You can check what is active at runtime:
+
+```ruby
+Renderhive.native? # => true when the compiled extension is loaded
+```
+
+### Buffer-join benchmark
+
+Joining pre-rendered fragments into the final collection buffer
+(`benchmark/buffer_join_bench.rb`, MRI 3.4.6, 12 cores). `SafeBuffer#<<`
+is the pure-Ruby path Renderhive used before the extension:
+
+| Scenario             | `SafeBuffer#<<` | `Renderhive::Buffer.join` (native) | Speedup |
+| -------------------- | --------------: | ---------------------------------: | ------: |
+| 200 cards × ~2 KB    |       ~3.3k i/s |                          ~5.5k i/s |  ~1.68× |
+| 1000 cards × ~2 KB   |       ~1.5k i/s |                          ~1.5k i/s |    ~1×  |
+| 5000 cards × ~512 B  |       ~0.4k i/s |                          ~1.0k i/s |  ~2.19× |
+
+```sh
+bundle exec ruby benchmark/buffer_join_bench.rb
+```
+
+### Native HTML escaping
+
+`Renderhive::HTML.escape` is a native, allocation-light HTML escaper that
+matches `ERB::Util.html_escape` / `CGI.escapeHTML` byte-for-byte (escapes
+`& < > " '`). When there is nothing to escape it returns the input
+unchanged with **zero allocation**; otherwise it copies the safe runs in
+bulk and allocates the result once. It falls back to `CGI.escapeHTML`
+without the extension.
+
+There is also `Renderhive::HTML.unwrapped_html_escape`, which mirrors
+Action View's output-escaping semantics (honours the `html_safe`
+short-circuit and returns a `SafeBuffer`). Renderhive does **not** patch
+`ERB::Util` globally — wiring these primitives into your view layer is an
+explicit, opt-in decision left to the application.
+
+Benchmark (`benchmark/html_escape_bench.rb`, MRI 3.4.6):
+
+| Workload                              | vs `ERB::Util.html_escape` | vs `CGI.escapeHTML` |
+| ------------------------------------- | -------------------------: | ------------------: |
+| Typical text (no specials)            |                    ~1.21×  |             ~1.13×  |
+| Render-like (1000 rows × 5 fields)    |                    ~2.39×  |                 —   |
+| Escape-heavy markup                   |                    ~0.95×  |  ~0.58× (CGI wins)  |
+
+The headline gain is against `ERB::Util.html_escape` — the method Action
+View actually calls per output — driven by the common “no specials” case
+and lower per-call overhead. The stdlib `CGI.escapeHTML` (hand-tuned C)
+still wins on escape-heavy strings, so this is an optimisation for
+render-dominated, mostly-plain output rather than a universal win.
+
+```sh
+bundle exec ruby benchmark/html_escape_bench.rb
+```
+
 ## Instrumentation
 
 Renderhive emits `ActiveSupport::Notifications` events:
@@ -233,8 +303,14 @@ Renderhive emits `ActiveSupport::Notifications` events:
 ```sh
 cd gems/renderhive
 bundle install
+bundle exec rake compile  # builds the optional Rust extension
 bundle exec rake test
+bundle exec ruby benchmark/buffer_join_bench.rb
 ```
+
+Building the extension requires a Rust toolchain (`cargo`/`rustc`). If it is
+missing, skip `rake compile`; the tests and the gem run on the pure-Ruby
+fallback.
 
 ## License
 

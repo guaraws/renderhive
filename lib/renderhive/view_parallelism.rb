@@ -314,7 +314,7 @@ module Renderhive
       store_collection_html = %i[collection both].include?(delivery)
 
       fragments = store_fragments ? {} : nil
-      collection_html = store_collection_html ? ActiveSupport::SafeBuffer.new : nil
+      collection_parts = store_collection_html ? [] : nil
 
       if dynamic_locals.nil?
         # Fast path: each worker issues ONE call to the partial collection
@@ -338,7 +338,7 @@ module Renderhive
         end
 
         rendered.each do |records, html|
-          collection_html << html if collection_html
+          collection_parts << html if collection_parts
 
           next unless fragments
 
@@ -359,11 +359,15 @@ module Renderhive
 
         rendered_chunks.each do |pairs|
           pairs.each do |key, html|
-            collection_html << html if collection_html
+            collection_parts << html if collection_parts
             fragments[key] = html if fragments
           end
         end
       end
+
+      # Assemble the final collection buffer in one pass (native single-alloc
+      # join when available, pure-Ruby fallback otherwise).
+      collection_html = collection_parts && Renderhive::Buffer.join(collection_parts)
 
       [ fragments, collection_html, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload, delivery: delivery } ]
     end
