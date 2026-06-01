@@ -132,7 +132,7 @@ class CarsController < ApplicationController
                                  only: :index,
                min_size: 6,
                                  workload: :io,
-                                 delivery: :collection
+                                 delivery: :fragments
 
   def index
     @cars = Car.all.to_a.freeze
