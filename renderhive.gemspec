@@ -24,14 +24,17 @@ Gem::Specification.new do |spec|
 
   spec.files = Dir[
     "lib/**/*.rb",
+    "ext/**/*.{rs,toml,rb}",
     "README.md",
     "CHANGELOG.md",
     "LICENSE.txt"
   ]
   spec.require_paths = [ "lib" ]
+  spec.extensions = [ "ext/renderhive_native/extconf.rb" ]
 
   spec.add_dependency "actionpack",     ">= 7.0"
   spec.add_dependency "actionview",     ">= 7.0"
   spec.add_dependency "activesupport",  ">= 7.0"
   spec.add_dependency "concurrent-ruby", ">= 1.2"
+  spec.add_dependency "rb_sys",          ">= 0.9"
 end

@@ -1,0 +1,15 @@
+[package]
+name = "renderhive_native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Native buffer-join routines for the Renderhive gem."
+
+[lib]
+name = "renderhive_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+magnus = "0.7"
+rayon = "1.10"

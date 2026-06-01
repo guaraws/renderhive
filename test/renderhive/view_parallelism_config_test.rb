@@ -50,6 +50,55 @@ class Renderhive::ViewParallelismConfigTest < Minitest::Test
     assert_equal :collection, controller.renderhive_parallel_collection_configs.first[:delivery]
   end
 
+  def test_parallelize_partial_collection_stores_dedup_callable
+    dedup = ->(record) { record }
+
+    controller = Class.new do
+      include Renderhive::ViewParallelism
+
+      class << self
+        def helper(*)
+        end
+      end
+
+      parallelize_partial_collection :cars, dedup: dedup
+    end
+
+    assert_same dedup, controller.renderhive_parallel_collection_configs.first[:dedup]
+  end
+
+  def test_parallelize_partial_collection_dedup_defaults_to_nil
+    controller = Class.new do
+      include Renderhive::ViewParallelism
+
+      class << self
+        def helper(*)
+        end
+      end
+
+      parallelize_partial_collection :cars
+    end
+
+    assert_nil controller.renderhive_parallel_collection_configs.first[:dedup]
+  end
+
+  def test_parallelize_partial_collection_rejects_non_callable_dedup
+    err = assert_raises(ArgumentError) do
+      Class.new do
+        include Renderhive::ViewParallelism
+
+        class << self
+          def helper(*)
+          end
+        end
+
+        parallelize_partial_collection :cars, dedup: :status
+      end
+    end
+
+    assert_match(/dedup deve responder a #call/, err.message)
+  end
+
   def test_parallelize_view_methods_rejects_invalid_workload
     err = assert_raises(ArgumentError) do
       Class.new do

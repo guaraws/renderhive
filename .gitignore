@@ -10,3 +10,11 @@ Gemfile.lock
 *.gem
 .idea/
 .vscode/
+
+# Native extension build artifacts
+/target/
+*.so
+*.bundle
+*.o
+Cargo.lock
+
