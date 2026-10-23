@@ -1,0 +1,55 @@
+Renderhive native extension loaded: true
+Ruby: ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+CPUs: 12
+
+== 200 cards x ~2KB (408.6 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+              String#<<     1.928k i/100ms
+          SafeBuffer#<<     1.262k i/100ms
+Renderhive::Buffer.join   916.000 i/100ms
+Calculating -------------------------------------
+              String#<<     17.693k (± 2.2%) i/s   (56.52 μs/i) -     53.984k in   3.051108s
+          SafeBuffer#<<     11.980k (± 1.9%) i/s   (83.48 μs/i) -     36.598k in   3.055026s
+Renderhive::Buffer.join      9.258k (± 4.8%) i/s  (108.01 μs/i) -     28.396k in   3.067101s
+
+Comparison:
+              String#<<:    17693.2 i/s
+          SafeBuffer#<<:    11979.6 i/s - 1.48x  slower
+Renderhive::Buffer.join:     9258.3 i/s - 1.91x  slower
+
+
+== 1000 cards x ~2KB (2043.0 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+              String#<<   389.000 i/100ms
+          SafeBuffer#<<   256.000 i/100ms
+Renderhive::Buffer.join   257.000 i/100ms
+Calculating -------------------------------------
+              String#<<      3.778k (± 3.4%) i/s  (264.69 μs/i) -     11.670k in   3.088894s
+          SafeBuffer#<<      2.427k (± 5.8%) i/s  (412.09 μs/i) -      7.424k in   3.059392s
+Renderhive::Buffer.join      2.479k (± 6.2%) i/s  (403.35 μs/i) -      7.453k in   3.006145s
+
+Comparison:
+              String#<<:     3778.1 i/s
+Renderhive::Buffer.join:     2479.3 i/s - 1.52x  slower
+          SafeBuffer#<<:     2426.6 i/s - 1.56x  slower
+
+
+== 5000 cards x ~512B (2714.8 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+              String#<<   128.000 i/100ms
+          SafeBuffer#<<    70.000 i/100ms
+Renderhive::Buffer.join   163.000 i/100ms
+Calculating -------------------------------------
+              String#<<      1.289k (± 5.7%) i/s  (775.84 μs/i) -      3.968k in   3.078541s
+          SafeBuffer#<<    626.972 (± 7.8%) i/s    (1.59 ms/i) -      1.960k in   3.126135s
+Renderhive::Buffer.join      1.457k (± 6.9%) i/s  (686.35 μs/i) -      4.401k in   3.020630s
+
+Comparison:
+Renderhive::Buffer.join:     1457.0 i/s
+              String#<<:     1288.9 i/s - same-ish: difference falls within error
+          SafeBuffer#<<:      627.0 i/s - 2.32x  slower
+
+

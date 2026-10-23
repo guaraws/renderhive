@@ -36,6 +36,39 @@ untouched.
 
 ## Benchmarks
 
+### In-repo end-to-end benchmark
+
+`benchmark/rails_render_bench.rb` drives a real `ActionController::Base` +
+Action View stack (in-memory templates) through `Rack::MockRequest`, checks
+that every strategy produces byte-identical HTML, and reports p50 latency.
+Three partial flavours: **cpu** (pure ERB), **mixed** (every 10th card adds a
+~50 µs blocking call, ~40% off-GVL) and **io** (a 0.2 ms blocking call per
+card, standing in for a lazy association or cache read).
+
+MRI 4.0.6, Linux x86_64, 12 CPUs, 20 runs after 3 warm-ups. Speedup vs serial
+Rails rendering (higher is better):
+
+| Partial | Cards | Serial p50 | `render @cards` (`:fragments`) | `renderhive_collection` |
+| ------- | ----: | ---------: | -----------------------------: | ----------------------: |
+| cpu     |   200 |    1.64 ms |                          1.01× |                   1.06× |
+| cpu     | 1 000 |    7.03 ms |                          1.00× |                   1.02× |
+| mixed   |   200 |    3.68 ms |                          1.27× |                   1.28× |
+| mixed   | 1 000 |   18.03 ms |                          1.81× |                   1.80× |
+| io      |   200 |   53.71 ms |                          9.41× |                   9.42× |
+| io      | 1 000 |  266.36 ms |                         10.76× |                  10.80× |
+
+```sh
+bundle exec ruby benchmark/rails_render_bench.rb
+SIZES=200,1000 KINDS=io BENCH_RUNS=30 bundle exec ruby benchmark/rails_render_bench.rb
+```
+
+CPU-bound pages break even instead of getting slower: the adaptive `:auto`
+workload notices the GVL is saturated and renders inline (see
+[Choosing a workload profile](#choosing-a-workload-profile)). The
+[optimization report](docs/performance.md) has the before/after numbers.
+
+### Reference application
+
 Numbers below come from the reference Rails 8.1 app shipped alongside
 this gem (`script/bench_cars_index.rb`), hitting the full Rack stack via
 `Rails.application.call(env)` against the `CarsController#index` action.
@@ -62,7 +95,9 @@ RAILS_ENV=test bundle exec ruby script/bench_cars_index.rb
 ### Why the gain is not "Nx workers"
 
 ERB rendering on MRI is CPU-bound Ruby and the **GVL** serializes pure
-Ruby execution. The measurable gains come from:
+Ruby execution. Only time spent off the GVL (I/O, DB, cache, sleeps) can
+overlap, so the ceiling is `1 / (share of time holding the GVL)`. The
+measurable gains come from:
 
 1. Overlapping I/O performed inside partials (lazy AR associations,
    `Rails.cache` reads, `image_url`/`asset_path` lookups).
@@ -155,8 +190,10 @@ That's it. On the next request Renderhive will:
 
 1. Pre-compute `total_cars_card`, `brands_count_card` and
    `latest_year_card` in parallel and memoize the results.
-2. Pre-render `@cars` in parallel chunks and intercept the per-record
-   `render car` calls in the view.
+2. Pre-render `@cars` in parallel chunks and intercept both the
+   whole-collection `render @cars` / `render partial: "cars/car",
+   collection: @cars` calls and the per-record `render car` calls in the
+   view, so nothing is rendered twice.
 
 ### DSL reference
 
@@ -188,8 +225,13 @@ pre-rendering.
 
 ### Choosing a workload profile
 
-- `:auto` — default mode. Keeps the configured worker count and is the best
-  starting point when the partial mixes rendering and I/O.
+- `:auto` — default mode. **Adaptive** when the native extension is loaded on
+  Ruby >= 3.3 (Unix): every render is split into time holding the GVL, time
+  waiting for it, and time off it (I/O), measured by a native GVL event hook.
+  If the observed I/O share cannot buy at least a 1.25× speedup, the
+  collection renders inline on the request thread (no hand-offs, no GVL
+  contention); when I/O shows up again it fans back out. Without GVL
+  accounting it keeps the configured worker count.
 - `:io` — prefer this when helpers or partials trigger lazy queries, cache
   reads, asset path resolution or other wait-heavy work.
 - `:cpu` — prefer this for ERB-heavy, string-heavy partials on MRI. Renderhive
@@ -205,16 +247,22 @@ pre-rendering.
 
 ## Native extension (Rust)
 
-Renderhive ships an **optional** Rust extension (`renderhive_native`) that
-accelerates the final step of collection pre-rendering: joining the many
-HTML fragments into a single buffer.
+Renderhive ships an **optional** Rust extension (`renderhive_native`) with
+three pieces:
 
-- The whole result is allocated **once** (no incremental `SafeBuffer#<<`
-  reallocations) and filled in a single pass.
-- For large payloads the byte copy is spread across CPU cores with
-  [`rayon`](https://crates.io/crates/rayon), giving **true parallelism**
-  that is not serialized by the GVL (each worker only touches disjoint
-  byte ranges of pre-rendered, immutable strings).
+- **GVL accounting** (Ruby >= 3.3, Unix) — a thread-event hook records, per
+  Ruby thread, the time spent holding and waiting for the GVL. It is what
+  lets `workload: :auto` tell I/O-bound partials (parallelize) from
+  GVL-bound ones (render inline). Threads that never ask for stats only pay
+  one thread-specific lookup per GVL transition.
+- **Buffer join** — computes the output size with overflow checks, allocates
+  one UTF-8 Ruby string and `memcpy`s every fragment straight into it. The
+  fallback uses `Array#join`. Both paths trust the fragments as already
+  rendered HTML and return a `SafeBuffer`; do not pass unescaped user input.
+- **HTML escaping** — SSE2-vectorized (portable scalar fallback), see below.
+
+The GVL stays held whenever Ruby strings are accessed; Rust does not make
+ERB execution itself run outside the GVL.
 
 The extension is **fully optional**: if no Rust toolchain is available at
 install time, Renderhive transparently falls back to a pure-Ruby join, so
@@ -226,27 +274,31 @@ Renderhive.native? # => true when the compiled extension is loaded
 
 ### Buffer-join benchmark
 
-Joining pre-rendered fragments into the final collection buffer
-(`benchmark/buffer_join_bench.rb`, MRI 3.4.6, 12 cores). `SafeBuffer#<<`
-is the pure-Ruby path Renderhive used before the extension:
-
-| Scenario             | `SafeBuffer#<<` | `Renderhive::Buffer.join` (native) | Speedup |
-| -------------------- | --------------: | ---------------------------------: | ------: |
-| 200 cards × ~2 KB    |       ~3.3k i/s |                          ~5.5k i/s |  ~1.68× |
-| 1000 cards × ~2 KB   |       ~1.5k i/s |                          ~1.5k i/s |    ~1×  |
-| 5000 cards × ~512 B  |       ~0.4k i/s |                          ~1.0k i/s |  ~2.19× |
+The benchmark includes `Array#join`, `String#<<`, `SafeBuffer#<<`, and the
+native path, with both many small fragments and a few large worker batches.
+It verifies byte-identical output before measuring. Run it on your deployment
+hardware; assembly throughput is not an end-to-end Rails rendering speedup.
 
 ```sh
 bundle exec ruby benchmark/buffer_join_bench.rb
+# Shorter exploratory run:
+BENCH_TIME=1 BENCH_WARMUP=0.5 bundle exec ruby benchmark/buffer_join_bench.rb
 ```
+
+Measured on MRI 4.0.6 it is on par with or ahead of `Array#join`
+(1.0–1.6× across repeated runs; individual runs are noisy): joining a few hundred fragments takes tens of microseconds, so
+it is never the bottleneck of a request. See [the optimization
+report](docs/performance.md) for details and remaining limitations.
 
 ### Native HTML escaping
 
-`Renderhive::HTML.escape` is a native, allocation-light HTML escaper that
-matches `ERB::Util.html_escape` / `CGI.escapeHTML` byte-for-byte (escapes
-`& < > " '`). When there is nothing to escape it returns the input
-unchanged with **zero allocation**; otherwise it copies the safe runs in
-bulk and allocates the result once. It falls back to `CGI.escapeHTML`
+`Renderhive::HTML.escape` is a native HTML escaper that matches
+`ERB::Util.html_escape` / `CGI.escapeHTML` byte-for-byte (escapes
+`& < > " '`). It scans 16 bytes per step with SSE2 compares, sums the exact
+output size with `psadbw`, and writes the result straight into one Ruby
+allocation carrying the input's encoding, using fixed-width stores for
+replacements and short runs. When there is nothing to escape it returns the
+input unchanged with **zero allocation**. It falls back to `CGI.escapeHTML`
 without the extension.
 
 There is also `Renderhive::HTML.unwrapped_html_escape`, which mirrors
@@ -255,19 +307,18 @@ short-circuit and returns a `SafeBuffer`). Renderhive does **not** patch
 `ERB::Util` globally — wiring these primitives into your view layer is an
 explicit, opt-in decision left to the application.
 
-Benchmark (`benchmark/html_escape_bench.rb`, MRI 3.4.6):
+Benchmark (`benchmark/html_escape_bench.rb`, MRI 4.0.6, x86_64):
 
 | Workload                              | vs `ERB::Util.html_escape` | vs `CGI.escapeHTML` |
 | ------------------------------------- | -------------------------: | ------------------: |
-| Typical text (no specials)            |                    ~1.21×  |             ~1.13×  |
-| Render-like (1000 rows × 5 fields)    |                    ~2.39×  |                 —   |
-| Escape-heavy markup                   |                    ~0.95×  |  ~0.58× (CGI wins)  |
+| Typical text (no specials)            |                    ~3.5×   |             ~3.0×   |
+| Light (~2% specials)                  |                    ~2.5×   |             ~1.8×   |
+| Escape-heavy markup                   |                    ~2.0×   |             ~1.14×  |
+| Render-like (1000 rows × 5 fields)    |                    ~2.7×   |                 —   |
 
-The headline gain is against `ERB::Util.html_escape` — the method Action
-View actually calls per output — driven by the common “no specials” case
-and lower per-call overhead. The stdlib `CGI.escapeHTML` (hand-tuned C)
-still wins on escape-heavy strings, so this is an optimisation for
-render-dominated, mostly-plain output rather than a universal win.
+Escaping is a small share of a typical partial's render time (removing it
+entirely did not move the end-to-end benchmark beyond noise), which is why
+Renderhive does not patch it in globally.
 
 ```sh
 bundle exec ruby benchmark/html_escape_bench.rb
@@ -313,15 +364,24 @@ Renderhive emits `ActiveSupport::Notifications` events:
 | Event                          | Payload keys |
 | ------------------------------ | --- |
 | `view_methods.renderhive`      | `controller`, `action`, `methods`, `workload`, `workers`, `elapsed_ms` |
-| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `delivery`, `deduped`, `distinct_count`, `elapsed_ms`, `reason` |
+| `view_collection.renderhive`   | `controller`, `action`, `collection`, `partial`, `size`, `min_size`, `skipped`, `render_mode`, `batch_count`, `chunk_size`, `workers`, `workload`, `delivery`, `deduped`, `distinct_count`, `io_share`, `elapsed_ms`, `reason` |
+
+`io_share` is the smoothed fraction of render time spent off the GVL as
+learned by the adaptive `:auto` workload (`nil` until measured or when GVL
+accounting is unavailable); `workers: 1` means it chose to render inline.
 
 ## Caveats
 
 - See the [Benchmarks](#benchmarks) section for realistic expectations
-  on MRI — the GVL caps the speedup at roughly 1.4–1.6× for pure
-  rendering workloads.
-- If a partial is mostly ERB/string work on MRI, prefer `workload: :cpu`
-  so Renderhive stays conservative about extra workers.
+  on MRI — pure ERB rendering cannot go faster than serial under the GVL;
+  gains come from overlapping I/O.
+- Without GVL accounting (no extension, Ruby < 3.3, Windows), `:auto` does
+  not adapt: use `workload: :cpu` for partials that are mostly ERB/string
+  work so Renderhive stays conservative about extra workers.
+- Whole-collection interception only applies when the view renders exactly
+  the pre-rendered records in the same order with no extra locals; any other
+  call (a subset, a different order, extra locals) falls back to a regular
+  render.
 - If you control the template, prefer `delivery: :collection` with
   `renderhive_collection(:items)` to remove the per-record render loop from
   the hot path.

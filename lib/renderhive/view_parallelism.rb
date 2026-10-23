@@ -33,20 +33,33 @@ module Renderhive
 
     # Helper module injected into the controller's view helpers so that
     # `render(record)` returns the pre-rendered fragment when available.
+    #
+    # Whole-collection calls (`render @cards`, `render partial: "cards/card",
+    # collection: @cards`) are answered with the pre-joined collection HTML
+    # when they target exactly the pre-rendered records, so the most common
+    # idiom does not render the collection a second time.
     module RenderInterceptor
+      COLLECTION_RENDER_KEYS = %i[ partial collection as ].freeze
+
       def render(options = {}, locals = nil, &block)
         ctrl = controller
-        if ctrl
-          cache = ctrl.instance_variable_get(:@_renderhive_fragments_by_partial)
-          if cache && (locals.nil? || locals.empty?) && block.nil? &&
-             options.respond_to?(:to_partial_path)
-            partial_path = options.to_partial_path
-            fragments = cache[partial_path]
+        if ctrl && (locals.nil? || locals.empty?) && block.nil?
+          if options.respond_to?(:to_partial_path)
+            cache = ctrl.instance_variable_get(:@_renderhive_fragments_by_partial)
+            fragments = cache && cache[options.to_partial_path]
             if fragments
               key = options.respond_to?(:id) && (id = options.id) ? id : options.object_id
               fragment = fragments[key]
               return fragment if fragment
             end
+          elsif ctrl.instance_variable_get(:@_renderhive_collections_by_partial)
+            html =
+              if options.respond_to?(:to_ary)
+                ctrl.send(:renderhive_pre_rendered_collection_html, options, nil, nil)
+              elsif options.is_a?(Hash) && options.key?(:collection) && (options.keys - COLLECTION_RENDER_KEYS).empty?
+                ctrl.send(:renderhive_pre_rendered_collection_html, options[:collection], options[:partial], options[:as])
+              end
+            return html if html
           end
         end
 
@@ -132,7 +145,8 @@ module Renderhive
             batch_size: batch_size&.to_i,
             workload: normalized_workload,
             delivery: normalized_delivery,
-            dedup: normalized_dedup
+            dedup: normalized_dedup,
+            profile: Renderhive::WorkloadProfile.new
           }
         ]
       end
@@ -268,7 +282,7 @@ module Renderhive
         template = base_view.lookup_context.find_template(partial_path, [], true, [ local_name ], {})
         started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-        fragments, collection_html, metrics = renderhive_pre_render_collection(
+        fragments, parts, metrics = renderhive_pre_render_collection(
           collection,
           partial_path,
           template,
@@ -279,8 +293,17 @@ module Renderhive
 
         @_renderhive_fragments_by_partial ||= {}
         @_renderhive_fragments_by_partial[partial_path] = fragments if fragments
-        @_renderhive_collection_html ||= {}
-        @_renderhive_collection_html[config[:collection_name]] = collection_html if collection_html
+        @_renderhive_collections_by_partial ||= {}
+        entry = @_renderhive_collections_by_partial[partial_path] = {
+          records: collection,
+          parts: parts,
+          local_name: local_name.to_sym,
+          html: nil
+        }
+        if %i[collection both].include?(metrics[:delivery])
+          @_renderhive_collection_html ||= {}
+          @_renderhive_collection_html[config[:collection_name]] = renderhive_entry_html(entry)
+        end
 
         ActiveSupport::Notifications.instrument(
           "view_collection.renderhive",
@@ -299,6 +322,7 @@ module Renderhive
           delivery: metrics[:delivery],
           deduped: metrics[:deduped] || false,
           distinct_count: metrics[:distinct_count],
+          io_share: config[:profile]&.io_share,
           elapsed_ms: renderhive_elapsed_ms(started_at)
         )
       end
@@ -307,7 +331,7 @@ module Renderhive
     def renderhive_pre_render_collection(collection, partial_path, template, local_name, config, base_view)
       size = collection.size
       workload = config[:workload] || :auto
-      workers = Renderhive::Executor.worker_count_for(size, max_threads: config[:max_threads], workload: workload)
+      workers = Renderhive::Executor.worker_count_for(size, max_threads: config[:max_threads], workload: workload, profile: config[:profile])
       workers = 1 if workers <= 0
 
       chunk_size =
@@ -322,10 +346,12 @@ module Renderhive
       static_locals = config[:locals].is_a?(Hash) ? config[:locals] : EMPTY_LOCALS
       delivery = config[:delivery] || :fragments
       store_fragments = %i[fragments both].include?(delivery)
-      store_collection_html = %i[collection both].include?(delivery)
 
       fragments = store_fragments ? {} : nil
-      collection_parts = store_collection_html ? [] : nil
+      # Ordered HTML parts are always kept: they back both the
+      # `renderhive_collection` helper and intercepted `render @collection`
+      # calls, and are only joined when one of those asks for them.
+      collection_parts = []
 
       if config[:dedup]
         # De-duplication path: many records that map to the same key produce
@@ -334,7 +360,7 @@ module Renderhive
         # record that shares the key. Work is proportional to the number of
         # DISTINCT outputs, not to the collection size.
         keys, distinct_pairs = renderhive_dedup_index(collection, config[:dedup])
-        distinct_workers = Renderhive::Executor.worker_count_for(distinct_pairs.size, max_threads: config[:max_threads], workload: workload)
+        distinct_workers = Renderhive::Executor.worker_count_for(distinct_pairs.size, max_threads: config[:max_threads], workload: workload, profile: config[:profile])
         distinct_workers = 1 if distinct_workers <= 0
         distinct_chunk =
           if config[:batch_size].to_i.positive?
@@ -344,7 +370,7 @@ module Renderhive
           end
         distinct_chunks = distinct_pairs.each_slice(distinct_chunk).to_a
 
-        rendered_chunks = Renderhive::Executor.map(distinct_chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |pairs|
+        rendered_chunks = Renderhive::Executor.map(distinct_chunks, max_threads: config[:max_threads], needs_db: false, workload: workload, profile: config[:profile]) do |pairs|
           view = base_view.dup
           pairs.map do |key, record|
             locals = renderhive_locals_for_fragment(local_name, record, dynamic_locals, static_locals)
@@ -361,13 +387,11 @@ module Renderhive
           end
         end
 
-        keys.each { |key| collection_parts << html_by_key[key] } if collection_parts
-
-        collection_html = collection_parts && Renderhive::Buffer.join(collection_parts)
+        keys.each { |key| collection_parts << html_by_key[key] }
 
         return [
           fragments,
-          collection_html,
+          collection_parts,
           {
             batch_count: distinct_chunks.size,
             chunk_size: distinct_chunk,
@@ -386,7 +410,7 @@ module Renderhive
         # RenderInterceptor returns the full batch HTML on the first hit
         # and an empty string on the following ones — equivalent output
         # with 1 render per worker instead of 1 per record.
-        rendered = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |records|
+        rendered = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload, profile: config[:profile]) do |records|
           view = base_view.dup
           render_opts = {
             partial: partial_path,
@@ -400,7 +424,7 @@ module Renderhive
         end
 
         rendered.each do |records, html|
-          collection_parts << html if collection_parts
+          collection_parts << html
 
           next unless fragments
 
@@ -411,7 +435,7 @@ module Renderhive
       else
         # Dynamic locals per record require individual calls; we still
         # reuse the pre-resolved template to skip template lookup.
-        rendered_chunks = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload) do |records|
+        rendered_chunks = Renderhive::Executor.map(chunks, max_threads: config[:max_threads], needs_db: false, workload: workload, profile: config[:profile]) do |records|
           view = base_view.dup
           records.map do |record|
             locals = renderhive_locals_for_fragment(local_name, record, dynamic_locals, static_locals)
@@ -421,17 +445,49 @@ module Renderhive
 
         rendered_chunks.each do |pairs|
           pairs.each do |key, html|
-            collection_parts << html if collection_parts
+            collection_parts << html
             fragments[key] = html if fragments
           end
         end
       end
 
-      # Assemble the final collection buffer in one pass (native single-alloc
-      # join when available, pure-Ruby fallback otherwise).
-      collection_html = collection_parts && Renderhive::Buffer.join(collection_parts)
+      [ fragments, collection_parts, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload, delivery: delivery } ]
+    end
 
-      [ fragments, collection_html, { batch_count: chunks.size, chunk_size: chunk_size, workers: workers, workload: workload, delivery: delivery } ]
+    # Returns the pre-joined HTML when `records` are exactly (same objects,
+    # same order) the records pre-rendered for that partial; nil otherwise so
+    # the caller falls back to a regular Action View render.
+    def renderhive_pre_rendered_collection_html(records, partial, as)
+      return unless records.respond_to?(:to_ary)
+
+      records = records.to_ary
+      return if records.empty?
+
+      partial_path = partial ? partial.to_s : (records.first.respond_to?(:to_partial_path) && records.first.to_partial_path)
+      entry = @_renderhive_collections_by_partial[partial_path]
+      return unless entry
+      return if as && as.to_sym != entry[:local_name]
+
+      stored = entry[:records]
+      unless records.equal?(stored)
+        return unless records.size == stored.size
+
+        i = 0
+        size = stored.size
+        while i < size
+          return unless records[i].equal?(stored[i])
+
+          i += 1
+        end
+      end
+
+      renderhive_entry_html(entry)
+    end
+
+    def renderhive_entry_html(entry)
+      # Assemble the final collection buffer in one pass (native single-alloc
+      # join when available, pure-Ruby fallback otherwise), at most once.
+      entry[:html] ||= Renderhive::Buffer.join(entry[:parts])
     end
 
     def renderhive_active_method_configs

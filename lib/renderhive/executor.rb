@@ -18,50 +18,38 @@ module Renderhive
     VALID_WORKLOADS = %i[ auto io cpu ].freeze
 
     class << self
-      def worker_count_for(size, max_threads: nil, workload: :auto)
+      # `profile:` (a Renderhive::WorkloadProfile) lets `workload: :auto`
+      # collapse to a single inline worker when measurements show the work is
+      # GVL bound, i.e. parallelism cannot pay for its own overhead.
+      def worker_count_for(size, max_threads: nil, workload: :auto, profile: nil)
         return 0 if size.to_i <= 0
 
-        resolve_workers_count(size, max_threads, normalize_workload(workload))
+        normalized = normalize_workload(workload)
+        workers = resolve_workers_count(size, max_threads, normalized)
+        return 1 if normalized == :auto && profile && !profile.parallel?(workers)
+
+        workers
       end
 
-      def map(items, max_threads: nil, needs_db: true, workload: :auto, &block)
+      def map(items, max_threads: nil, needs_db: true, workload: :auto, profile: nil, &block)
         collection = items.is_a?(Array) ? items : items.to_a
         size = collection.size
         return [] if size.zero?
 
-        workers = worker_count_for(size, max_threads: max_threads, workload: workload)
-        return collection.map(&block) if workers <= 1
+        workers = worker_count_for(size, max_threads: max_threads, workload: workload, profile: profile)
+        totals = profile && WorkloadProfile.supported? ? [ 0, 0 ] : nil
 
-        results = Array.new(size)
-        chunk_size = (size.to_f / workers).ceil
-        first_error = nil
-        error_mutex = Mutex.new
-
-        chunks = []
-        (0...size).each_slice(chunk_size) { |range| chunks << range }
-
-        latch = Concurrent::CountDownLatch.new(chunks.size)
-        pool = pool_for
-
-        chunks.each do |indices|
-          pool.post do
-            begin
-              run_in_worker_context(needs_db: needs_db) do
-                indices.each do |i|
-                  results[i] = block.call(collection[i])
-                end
-              end
-            rescue Exception => error # rubocop:disable Lint/RescueException
-              error_mutex.synchronize { first_error ||= error }
-            ensure
-              latch.count_down
-            end
+        results =
+          if workers <= 1
+            before = totals && WorkloadProfile.snapshot
+            mapped = collection.map(&block)
+            WorkloadProfile.sample(before, WorkloadProfile.snapshot, totals) if totals
+            mapped
+          else
+            run_shared_queue(collection, workers, needs_db, totals, block)
           end
-        end
 
-        latch.wait
-        raise first_error if first_error
-
+        profile.record(*totals) if totals
         results
       end
 
@@ -74,6 +62,70 @@ module Renderhive
       end
 
       private
+
+      # Work-sharing loop: items sit in a shared queue that both the pool
+      # workers and the calling thread drain. The caller never idles on a
+      # latch while there is work left, so:
+      # - one fewer thread hand-off per call (the caller does its share);
+      # - a saturated pool degrades to inline execution instead of queueing
+      #   the request behind other requests' tasks;
+      # - nested calls cannot deadlock waiting on their own pool.
+      # Helpers that start after the queue is empty exit immediately.
+      def run_shared_queue(collection, workers, needs_db, totals, block)
+        size = collection.size
+        results = Array.new(size)
+        state = { claimed: 0, done: 0, error: nil }
+        mutex = Mutex.new
+        finished = ConditionVariable.new
+        claimable = -> { state[:error].nil? && state[:claimed] < size }
+
+        drain = lambda do
+          loop do
+            index = mutex.synchronize do
+              next unless claimable.call
+
+              state[:claimed] += 1
+              state[:claimed] - 1
+            end
+            break if index.nil?
+
+            before = totals && WorkloadProfile.snapshot
+            begin
+              results[index] = block.call(collection[index])
+            rescue Exception => error # rubocop:disable Lint/RescueException
+              mutex.synchronize { state[:error] ||= error }
+            ensure
+              after = totals && WorkloadProfile.snapshot
+              mutex.synchronize do
+                WorkloadProfile.sample(before, after, totals) if totals
+                state[:done] += 1
+                finished.broadcast if state[:done] == state[:claimed]
+              end
+            end
+          end
+        end
+
+        pool = pool_for
+        (workers - 1).times do
+          pool.post do
+            begin
+              run_in_worker_context(needs_db: needs_db, &drain) if mutex.synchronize(&claimable)
+            rescue Exception => error # rubocop:disable Lint/RescueException
+              mutex.synchronize { state[:error] ||= error }
+            end
+          end
+        end
+
+        drain.call
+
+        # Nothing is claimable any more; wait only for items still in flight.
+        mutex.synchronize do
+          finished.wait(mutex) while state[:done] < state[:claimed]
+        end
+        raise state[:error] if state[:error]
+
+        results
+      end
 
       def pool_for
         pool_mutex.synchronize do
@@ -132,7 +184,7 @@ module Renderhive
         return @rails_executor if defined?(@rails_executor)
 
         @rails_executor =
-          if defined?(Rails) && Rails.application
+          if defined?(Rails) && Rails.respond_to?(:application) && Rails.application
             Rails.application.executor
           end
       end

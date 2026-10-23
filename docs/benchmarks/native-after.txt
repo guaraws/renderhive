@@ -1,0 +1,151 @@
+Renderhive native extension loaded: true
+Ruby: ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+CPUs: 12
+
+== 4 batches x ~512KB (2048.2 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   246.000 i/100ms
+              String#<<    87.000 i/100ms
+          SafeBuffer#<<    83.000 i/100ms
+Renderhive::Buffer.join   496.000 i/100ms
+Calculating -------------------------------------
+             Array#join      4.112k (± 8.4%) i/s  (243.17 μs/i) -      8.364k in   2.033884s
+              String#<<    888.952 (± 2.6%) i/s    (1.12 ms/i) -      1.827k in   2.055228s
+          SafeBuffer#<<    903.775 (± 5.1%) i/s    (1.11 ms/i) -      1.826k in   2.020415s
+Renderhive::Buffer.join      1.753k (± 1.4%) i/s  (570.47 μs/i) -      3.968k in   2.263636s
+
+Comparison:
+             Array#join:     4112.3 i/s
+Renderhive::Buffer.join:     1752.9 i/s - 2.35x  slower
+          SafeBuffer#<<:      903.8 i/s - 4.55x  slower
+              String#<<:      889.0 i/s - 4.63x  slower
+
+
+== 200 cards x ~2KB (408.6 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join     2.120k i/100ms
+              String#<<   497.000 i/100ms
+          SafeBuffer#<<     1.268k i/100ms
+Renderhive::Buffer.join     1.379k i/100ms
+Calculating -------------------------------------
+             Array#join     14.271k (± 2.1%) i/s   (70.07 μs/i) -     29.680k in   2.079755s
+              String#<<     18.729k (± 7.6%) i/s   (53.39 μs/i) -     37.772k in   2.016781s
+          SafeBuffer#<<     12.786k (± 4.9%) i/s   (78.21 μs/i) -     26.628k in   2.082514s
+Renderhive::Buffer.join     23.379k (± 3.4%) i/s   (42.77 μs/i) -     46.886k in   2.005495s
+
+Comparison:
+Renderhive::Buffer.join:    23378.8 i/s
+              String#<<:    18728.9 i/s - 1.25x  slower
+             Array#join:    14270.9 i/s - 1.64x  slower
+          SafeBuffer#<<:    12786.5 i/s - 1.83x  slower
+
+
+== 1000 cards x ~2KB (2043.0 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   395.000 i/100ms
+              String#<<   330.000 i/100ms
+          SafeBuffer#<<   236.000 i/100ms
+Renderhive::Buffer.join   447.000 i/100ms
+Calculating -------------------------------------
+             Array#join      3.825k (± 4.1%) i/s  (261.44 μs/i) -      7.900k in   2.065408s
+              String#<<      1.231k (± 7.1%) i/s  (812.53 μs/i) -      2.640k in   2.145072s
+          SafeBuffer#<<      1.356k (± 7.7%) i/s  (737.59 μs/i) -      2.832k in   2.088860s
+Renderhive::Buffer.join      4.579k (± 7.7%) i/s  (218.40 μs/i) -      9.387k in   2.050134s
+
+Comparison:
+Renderhive::Buffer.join:     4578.7 i/s
+             Array#join:     3824.9 i/s - 1.20x  slower
+          SafeBuffer#<<:     1355.8 i/s - 3.38x  slower
+              String#<<:     1230.7 i/s - 3.72x  slower
+
+
+== 5000 cards x ~512B (2714.8 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   190.000 i/100ms
+              String#<<    55.000 i/100ms
+          SafeBuffer#<<    35.000 i/100ms
+Renderhive::Buffer.join   331.000 i/100ms
+Calculating -------------------------------------
+             Array#join      2.069k (±10.5%) i/s  (483.30 μs/i) -      4.180k in   2.020189s
+              String#<<    538.098 (± 9.5%) i/s    (1.86 ms/i) -      1.100k in   2.044237s
+          SafeBuffer#<<    400.213 (± 5.0%) i/s    (2.50 ms/i) -    805.000 in   2.011430s
+Renderhive::Buffer.join      3.178k (±10.4%) i/s  (314.66 μs/i) -      6.620k in   2.083028s
+
+Comparison:
+Renderhive::Buffer.join:     3178.1 i/s
+             Array#join:     2069.1 i/s - 1.54x  slower
+              String#<<:      538.1 i/s - 5.91x  slower
+          SafeBuffer#<<:      400.2 i/s - 7.94x  slower
+
+
+Renderhive native extension loaded: true
+Ruby: ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+
+== no specials (typical text) (624 bytes) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+         CGI.escapeHTML   171.651k i/100ms
+  ERB::Util.html_escape   148.394k i/100ms
+Renderhive::HTML.escape   562.692k i/100ms
+Calculating -------------------------------------
+         CGI.escapeHTML      1.713M (± 2.4%) i/s  (583.86 ns/i) -      5.150M in   3.006614s
+  ERB::Util.html_escape      1.478M (± 2.3%) i/s  (676.45 ns/i) -      4.452M in   3.011442s
+Renderhive::HTML.escape      5.553M (± 1.7%) i/s  (180.07 ns/i) -     16.881M in   3.039703s
+
+Comparison:
+Renderhive::HTML.escape:  5553424.2 i/s
+         CGI.escapeHTML:  1712734.2 i/s - 3.24x  slower
+  ERB::Util.html_escape:  1478302.0 i/s - 3.76x  slower
+
+
+== light (~2% specials) (852 bytes) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+         CGI.escapeHTML   100.528k i/100ms
+  ERB::Util.html_escape    68.422k i/100ms
+Renderhive::HTML.escape   165.636k i/100ms
+Calculating -------------------------------------
+         CGI.escapeHTML      1.010M (± 1.2%) i/s  (990.25 ns/i) -      3.116M in   3.085969s
+  ERB::Util.html_escape    667.106k (± 1.6%) i/s    (1.50 μs/i) -      2.053M in   3.076964s
+Renderhive::HTML.escape      1.724M (± 2.0%) i/s  (579.93 ns/i) -      5.300M in   3.073846s
+
+Comparison:
+Renderhive::HTML.escape:  1724338.9 i/s
+         CGI.escapeHTML:  1009850.7 i/s - 1.71x  slower
+  ERB::Util.html_escape:   667105.6 i/s - 2.58x  slower
+
+
+== heavy (markup soup) (584 bytes) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+         CGI.escapeHTML   101.675k i/100ms
+  ERB::Util.html_escape    61.247k i/100ms
+Renderhive::HTML.escape   118.889k i/100ms
+Calculating -------------------------------------
+         CGI.escapeHTML      1.068M (± 1.4%) i/s  (936.50 ns/i) -      3.254M in   3.047002s
+  ERB::Util.html_escape    601.236k (± 3.1%) i/s    (1.66 μs/i) -      1.837M in   3.056056s
+Renderhive::HTML.escape      1.234M (± 2.5%) i/s  (810.50 ns/i) -      3.804M in   3.083508s
+
+Comparison:
+Renderhive::HTML.escape:  1233805.2 i/s
+         CGI.escapeHTML:  1067803.7 i/s - 1.16x  slower
+  ERB::Util.html_escape:   601235.7 i/s - 2.05x  slower
+
+
+== render-like: 1000 rows x 5 fields ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+  ERB::Util.html_escape    36.000 i/100ms
+Renderhive::HTML.escape   101.000 i/100ms
+Calculating -------------------------------------
+  ERB::Util.html_escape    361.273 (± 1.9%) i/s    (2.77 ms/i) -      1.116k in   3.089079s
+Renderhive::HTML.escape      1.020k (± 1.1%) i/s  (980.25 μs/i) -      3.131k in   3.069170s
+
+Comparison:
+Renderhive::HTML.escape:     1020.1 i/s
+  ERB::Util.html_escape:      361.3 i/s - 2.82x  slower
+

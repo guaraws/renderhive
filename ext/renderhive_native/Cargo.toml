@@ -4,12 +4,15 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 license = "MIT"
-description = "Native buffer-join routines for the Renderhive gem."
+description = "Native buffer-join, HTML escaping and GVL accounting for the Renderhive gem."
 
 [lib]
 name = "renderhive_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-magnus = "0.9"
-rayon = "1.10"
+magnus = { version = "0.9", features = ["rb-sys"] }
+rb-sys = "0.9"
+
+[build-dependencies]
+rb-sys-env = "0.2"

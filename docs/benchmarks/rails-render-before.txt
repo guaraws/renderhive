@@ -1,0 +1,32 @@
+# Previous code (7dde4a2 + uncommitted buffer changes), with only the Rails.respond_to?(:application) crash fix applied so the benchmark can run.
+Renderhive native: true  ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]  CPUs: 12
+
+== cpu partial, 200 cards (42 KB) ==
+  serial                   avg=    1.71ms p50=    1.68ms min=    1.55ms   1.00x
+  renderhive fragments     avg=    4.36ms p50=    4.13ms min=    3.70ms   0.41x
+  renderhive collection    avg=    2.42ms p50=    2.37ms min=    2.31ms   0.71x
+
+== cpu partial, 1000 cards (213 KB) ==
+  serial                   avg=    7.27ms p50=    7.15ms min=    6.75ms   1.00x
+  renderhive fragments     avg=   15.70ms p50=   15.83ms min=   14.49ms   0.45x
+  renderhive collection    avg=    8.15ms p50=    8.01ms min=    7.45ms   0.89x
+
+== mixed partial, 200 cards (42 KB) ==
+  serial                   avg=    3.90ms p50=    3.76ms min=    3.65ms   1.00x
+  renderhive fragments     avg=    6.53ms p50=    6.41ms min=    6.24ms   0.59x
+  renderhive collection    avg=    3.03ms p50=    2.85ms min=    2.64ms   1.32x
+
+== mixed partial, 1000 cards (213 KB) ==
+  serial                   avg=   18.37ms p50=   18.12ms min=   17.72ms   1.00x
+  renderhive fragments     avg=   28.77ms p50=   28.78ms min=   27.28ms   0.63x
+  renderhive collection    avg=   10.33ms p50=   10.20ms min=    9.40ms   1.78x
+
+== io partial, 200 cards (42 KB) ==
+  serial                   avg=   53.81ms p50=   53.76ms min=   53.38ms   1.00x
+  renderhive fragments     avg=   59.82ms p50=   59.62ms min=   58.96ms   0.90x
+  renderhive collection    avg=    5.77ms p50=    5.71ms min=    5.62ms   9.41x
+
+== io partial, 1000 cards (213 KB) ==
+  serial                   avg=  266.84ms p50=  266.74ms min=  265.53ms   1.00x
+  renderhive fragments     avg=  292.14ms p50=  291.94ms min=  290.28ms   0.91x
+  renderhive collection    avg=   24.69ms p50=   24.56ms min=   23.76ms  10.86x

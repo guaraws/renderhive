@@ -1,0 +1,31 @@
+Renderhive native: true  ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]  CPUs: 12
+
+== cpu partial, 200 cards (42 KB) ==
+  serial                   avg=    1.83ms p50=    1.70ms min=    1.61ms   1.00x
+  renderhive fragments     avg=    1.74ms p50=    1.64ms min=    1.59ms   1.04x
+  renderhive collection    avg=    1.59ms p50=    1.55ms min=    1.50ms   1.10x
+
+== cpu partial, 1000 cards (213 KB) ==
+  serial                   avg=    7.36ms p50=    7.34ms min=    6.81ms   1.00x
+  renderhive fragments     avg=    7.41ms p50=    7.23ms min=    6.66ms   1.01x
+  renderhive collection    avg=    6.93ms p50=    6.81ms min=    6.48ms   1.08x
+
+== mixed partial, 200 cards (42 KB) ==
+  serial                   avg=    3.89ms p50=    3.75ms min=    3.66ms   1.00x
+  renderhive fragments     avg=    2.95ms p50=    2.95ms min=    2.81ms   1.27x
+  renderhive collection    avg=    2.84ms p50=    2.78ms min=    2.70ms   1.35x
+
+== mixed partial, 1000 cards (213 KB) ==
+  serial                   avg=   18.29ms p50=   18.28ms min=   17.41ms   1.00x
+  renderhive fragments     avg=   10.44ms p50=   10.27ms min=    9.75ms   1.78x
+  renderhive collection    avg=   10.25ms p50=   10.24ms min=    9.47ms   1.79x
+
+== io partial, 200 cards (42 KB) ==
+  serial                   avg=   53.98ms p50=   53.94ms min=   53.47ms   1.00x
+  renderhive fragments     avg=    5.80ms p50=    5.77ms min=    5.64ms   9.35x
+  renderhive collection    avg=    5.86ms p50=    5.70ms min=    5.60ms   9.47x
+
+== io partial, 1000 cards (213 KB) ==
+  serial                   avg=  267.44ms p50=  266.96ms min=  265.63ms   1.00x
+  renderhive fragments     avg=   25.52ms p50=   25.09ms min=   24.81ms  10.64x
+  renderhive collection    avg=   25.23ms p50=   24.83ms min=   24.18ms  10.75x

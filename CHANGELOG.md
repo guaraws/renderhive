@@ -7,10 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `render @collection` and `render partial: ..., collection: ...` in the view
+  rendered the whole collection a second time on top of the parallel
+  pre-render (only per-record `render record` calls were intercepted). They
+  now return the pre-joined HTML when they target exactly the pre-rendered
+  records, falling back to a regular render otherwise. On the in-repo
+  benchmark this turns 0.40–0.92× (slower than serial) into 1.0–10.8×.
+- `Renderhive::Executor` crashed with `NoMethodError` when the `Rails`
+  module was defined without railties (e.g. Action Pack/Action View only).
+- Native escape/join results with invalid UTF-8 bytes are no longer reported
+  as valid; the encoding is set before the length so Ruby derives the
+  coderange under the right encoding.
+
 ### Added
+- Adaptive `workload: :auto` for partial collections: a native GVL event hook
+  (Ruby >= 3.3, Unix) splits each render into time holding, waiting for and
+  off the GVL. Collections whose I/O share cannot buy a 1.25× speedup render
+  inline on the request thread; they fan out again when I/O appears.
+  Exposed as `Renderhive::WorkloadProfile` and the `io_share` notification key.
+- `benchmark/rails_render_bench.rb`: end-to-end ActionController + Action View
+  benchmark (cpu / mixed / io partials) with byte-identical output checks.
+- Integration tests against a real controller stack covering every view
+  idiom and delivery mode, including a render-count check for double renders.
 - Optional Rust extension (`renderhive_native`) that joins pre-rendered HTML
-  fragments with a single allocation and a parallel, off-GVL byte copy
-  (via `rayon`) for large payloads. Exposed through `Renderhive::Buffer.join`
+  fragments directly into a pre-sized Ruby string. Exposed through `Renderhive::Buffer.join`
   with a pure-Ruby fallback and a `Renderhive.native?` runtime check.
 - Native HTML escaper (`Renderhive::HTML.escape` / `unwrapped_html_escape`)
   matching `ERB::Util.html_escape`, with a zero-allocation fast path when
@@ -31,6 +52,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `chunk_size`, `delivery` and `elapsed_ms`.
 
 ### Changed
+- `Renderhive::Executor.map` uses a shared work queue drained by the pool
+  *and* the calling thread: the caller does its share instead of idling on a
+  latch, a saturated pool degrades to inline execution instead of queueing
+  behind other requests, nested calls cannot deadlock, and an error stops
+  remaining items from being claimed.
+- `Renderhive::HTML.escape` is SSE2-vectorized (portable scalar fallback),
+  sizes its output exactly, writes straight into one Ruby string and keeps the
+  input's encoding. Now ahead of `CGI.escapeHTML` on every benchmark sample
+  (1.14–3.0×), where it previously lost on escape-heavy markup (0.48×).
+- Native buffer join `memcpy`s straight into a UTF-8 Ruby string instead of
+  appending fragment by fragment; the Ruby side no longer re-tags encodings.
+- Ordered collection parts are kept for every delivery mode and joined lazily,
+  only when a view asks for the whole collection.
+- Native buffer assembly no longer zero-fills a temporary Rust buffer or copies
+  it back to Ruby. Removed Rayon from this memory-copy path and added checked
+  size arithmetic. The GVL remains held while Ruby strings are accessed.
+- The Ruby buffer fallback uses `Array#join`, matching the native contract for
+  already-rendered HTML instead of escaping ordinary String fragments again.
+- Buffer tests exercise native and fallback paths, embedded NULs, frozen inputs,
+  empty fragments, and compacted Ruby objects. Benchmarks include `Array#join`
+  and the few-large-batches case.
 - Collection pre-rendering now accumulates fragments and assembles the final
   buffer in a single pass via `Renderhive::Buffer.join` instead of repeated
   `SafeBuffer#<<` appends.
