@@ -11,5 +11,5 @@ name = "renderhive_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-magnus = "0.7"
+magnus = "0.9"
 rayon = "1.10"
