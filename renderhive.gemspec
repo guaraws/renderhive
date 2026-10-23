@@ -26,6 +26,8 @@ Gem::Specification.new do |spec|
     "lib/**/*.rb",
     "ext/**/*.{rs,toml,rb}",
     "README.md",
+    "docs/**/*.md",
+    "docs/benchmarks/*.txt",
     "CHANGELOG.md",
     "LICENSE.txt"
   ]

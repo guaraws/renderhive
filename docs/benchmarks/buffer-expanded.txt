@@ -1,0 +1,84 @@
+Renderhive native extension loaded: true
+Ruby: ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+CPUs: 12
+
+== 4 batches x ~512KB (2048.2 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   428.000 i/100ms
+              String#<<    88.000 i/100ms
+          SafeBuffer#<<    88.000 i/100ms
+Renderhive::Buffer.join   486.000 i/100ms
+Calculating -------------------------------------
+             Array#join      4.123k (± 6.4%) i/s  (242.55 μs/i) -     12.412k in   3.010592s
+              String#<<    708.153 (±19.6%) i/s    (1.41 ms/i) -      2.200k in   3.106673s
+          SafeBuffer#<<    805.836 (± 7.9%) i/s    (1.24 ms/i) -      2.464k in   3.057693s
+Renderhive::Buffer.join      4.714k (± 6.1%) i/s  (212.11 μs/i) -     14.580k in   3.092591s
+
+Comparison:
+Renderhive::Buffer.join:     4714.5 i/s
+             Array#join:     4122.8 i/s - 1.14x  slower
+          SafeBuffer#<<:      805.8 i/s - 5.85x  slower
+              String#<<:      708.2 i/s - 6.66x  slower
+
+
+== 200 cards x ~2KB (408.6 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join     1.999k i/100ms
+              String#<<   492.000 i/100ms
+          SafeBuffer#<<     1.241k i/100ms
+Renderhive::Buffer.join     2.319k i/100ms
+Calculating -------------------------------------
+             Array#join     20.793k (± 4.4%) i/s   (48.09 μs/i) -     63.968k in   3.076349s
+              String#<<      5.100k (± 2.3%) i/s  (196.10 μs/i) -     15.744k in   3.087361s
+          SafeBuffer#<<     11.492k (± 3.7%) i/s   (87.02 μs/i) -     34.748k in   3.023715s
+Renderhive::Buffer.join     22.560k (± 5.1%) i/s   (44.33 μs/i) -     69.570k in   3.083819s
+
+Comparison:
+Renderhive::Buffer.join:    22559.7 i/s
+             Array#join:    20793.5 i/s - same-ish: difference falls within error
+          SafeBuffer#<<:    11491.8 i/s - 1.96x  slower
+              String#<<:     5099.5 i/s - 4.42x  slower
+
+
+== 1000 cards x ~2KB (2043.0 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   369.000 i/100ms
+              String#<<    81.000 i/100ms
+          SafeBuffer#<<   253.000 i/100ms
+Renderhive::Buffer.join   471.000 i/100ms
+Calculating -------------------------------------
+             Array#join      3.745k (± 4.2%) i/s  (267.02 μs/i) -     11.439k in   3.054398s
+              String#<<    782.402 (±12.0%) i/s    (1.28 ms/i) -      2.349k in   3.002294s
+          SafeBuffer#<<    904.932 (± 2.7%) i/s    (1.11 ms/i) -      2.783k in   3.075369s
+Renderhive::Buffer.join      4.526k (± 4.1%) i/s  (220.95 μs/i) -     13.659k in   3.018021s
+
+Comparison:
+Renderhive::Buffer.join:     4525.8 i/s
+             Array#join:     3745.1 i/s - 1.21x  slower
+          SafeBuffer#<<:      904.9 i/s - 5.00x  slower
+              String#<<:      782.4 i/s - 5.78x  slower
+
+
+== 5000 cards x ~512B (2714.8 KB total) ==
+ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+Warming up --------------------------------------
+             Array#join   157.000 i/100ms
+              String#<<    74.000 i/100ms
+          SafeBuffer#<<    46.000 i/100ms
+Renderhive::Buffer.join   159.000 i/100ms
+Calculating -------------------------------------
+             Array#join      1.587k (± 4.0%) i/s  (630.06 μs/i) -      4.867k in   3.066484s
+              String#<<    814.465 (± 5.3%) i/s    (1.23 ms/i) -      2.516k in   3.089146s
+          SafeBuffer#<<    504.980 (± 4.6%) i/s    (1.98 ms/i) -      1.518k in   3.006060s
+Renderhive::Buffer.join      1.629k (± 3.0%) i/s  (613.90 μs/i) -      4.929k in   3.025902s
+
+Comparison:
+Renderhive::Buffer.join:     1628.9 i/s
+             Array#join:     1587.2 i/s - same-ish: difference falls within error
+              String#<<:      814.5 i/s - 2.00x  slower
+          SafeBuffer#<<:      505.0 i/s - 3.23x  slower
+
+
