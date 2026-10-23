@@ -46,4 +46,33 @@ class Renderhive::HTMLTest < Minitest::Test
     safe = "<b>bold</b>".html_safe
     assert_equal "<b>bold</b>", Renderhive::HTML.unwrapped_html_escape(safe)
   end
+
+  def test_escape_matches_cgi_at_every_block_offset
+    specials = [ "&", "<", ">", '"', "'" ]
+    (0..48).each do |len|
+      specials.each do |special|
+        (0...len).step(3) do |pos|
+          raw = "a" * len
+          raw[pos] = special
+          raw << "é" if pos.even?
+          assert_equal CGI.escapeHTML(raw), Renderhive::HTML.escape(raw), "len=#{len} pos=#{pos} #{special}"
+        end
+      end
+    end
+  end
+
+  def test_escape_matches_cgi_on_dense_markup
+    raw = %(<div class="c" data-x='1'><a href="/?a=1&b=2">x & y</a></div>) * 37
+    assert_equal CGI.escapeHTML(raw), Renderhive::HTML.escape(raw)
+  end
+
+  def test_escape_preserves_input_encoding_and_validity
+    invalid = "\xff<b>".dup.force_encoding(Encoding::UTF_8)
+    out = Renderhive::HTML.escape(invalid)
+    assert_equal Encoding::UTF_8, out.encoding
+    refute out.valid_encoding?
+
+    binary = "<\xff>".b
+    assert_equal CGI.escapeHTML(binary).encoding, Renderhive::HTML.escape(binary).encoding
+  end
 end

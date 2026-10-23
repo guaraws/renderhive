@@ -22,10 +22,9 @@ module Renderhive
       string = value.to_s
 
       if Renderhive.native?
-        escaped = Renderhive::Native.escape_html(string)
-        # The native escaper returns the same object when nothing was escaped
-        # (encoding already correct); a freshly built byte string otherwise.
-        escaped.equal?(string) ? escaped : escaped.force_encoding(Encoding::UTF_8)
+        # Returns the same object when nothing needs escaping; otherwise a new
+        # string carrying the input's encoding, like CGI.escapeHTML.
+        Renderhive::Native.escape_html(string)
       else
         CGI.escapeHTML(string)
       end

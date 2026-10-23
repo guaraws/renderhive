@@ -7,8 +7,7 @@
 # Compares three strategies across collection sizes and fragment sizes:
 #   * String#<<                       — plain mutable String concatenation
 #   * SafeBuffer#<<                   — Rails' pure-Ruby incremental buffer
-#   * Renderhive::Buffer.join (native)— single-alloc Rust join (parallel copy
-#                                       for large payloads), when compiled
+#   * Renderhive::Buffer.join (native)— pre-sized Rust join, when compiled
 #
 # Run with:
 #   bundle exec ruby benchmark/buffer_join_bench.rb
@@ -41,6 +40,7 @@ def string_join(parts)
 end
 
 SCENARIOS = [
+  { label: "4 batches x ~512KB", count: 4, bytes: 524_288 },
   { label: "200 cards x ~2KB",   count: 200,   bytes: 2_048 },
   { label: "1000 cards x ~2KB",  count: 1_000, bytes: 2_048 },
   { label: "5000 cards x ~512B", count: 5_000, bytes: 512 }
@@ -60,8 +60,9 @@ SCENARIOS.each do |scenario|
   puts "== #{scenario[:label]} (#{total_kb.round(1)} KB total) =="
 
   Benchmark.ips do |x|
-    x.config(time: 3, warmup: 1)
+    x.config(time: ENV.fetch("BENCH_TIME", 3).to_f, warmup: ENV.fetch("BENCH_WARMUP", 1).to_f)
 
+    x.report("Array#join")       { parts.join }
     x.report("String#<<")        { string_join(parts) }
     x.report("SafeBuffer#<<")    { safe_buffer_join(parts) }
     x.report("Renderhive::Buffer.join") { Renderhive::Buffer.join(parts) }
