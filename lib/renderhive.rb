@@ -4,6 +4,7 @@ require "active_support/core_ext/class/attribute"
 require "active_support/notifications"
 
 require "renderhive/version"
+require "renderhive/workload_profile"
 require "renderhive/executor"
 require "renderhive/buffer"
 require "renderhive/html"
