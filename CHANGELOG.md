@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread overhead.
 - Executor error propagation now stores only the first worker exception,
   cutting allocations on the failure path.
+- The native extension now depends on `magnus` 0.9 (was 0.7), which builds
+  against Ruby 4.0. magnus 0.7 failed to compile there (`RTypedData` layout
+  changed). Still builds on Ruby 3.4.
 
 ## [0.1.0] - 2026-05-26
 
